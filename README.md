@@ -1,16 +1,39 @@
-# water_sort
+# Water Sort Puzzle (Flutter)
 
-A new Flutter project.
+A simple and fun Water Sort Puzzle game built with Flutter.
+Your goal is to sort all colored water into their matching tubes.
+Includes smooth animations, hint system, sound effects, themes, and level progression.
 
-## Getting Started
+🖼️ Screenshots
 
-This project is a starting point for a Flutter application.
+game screen 
 
-A few resources to get you started if this is your first Flutter project:
+<img width="591" height="1280" alt="image" src="https://github.com/user-attachments/assets/d0269d1b-c252-4f64-9266-7af2ddb2ebb5" />
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+setting screen
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+<img width="591" height="1280" alt="image" src="https://github.com/user-attachments/assets/b77d8dd9-1d13-4456-b9e7-fc2debe2d226" />
+
+level selection page
+
+<img width="591" height="1280" alt="image" src="https://github.com/user-attachments/assets/1b4d43c9-2d89-4ef4-8f24-2bdef8084eae" />
+
+home screen
+
+<img width="591" height="1280" alt="image" src="https://github.com/user-attachments/assets/d3907c47-4c2d-455e-b613-f84f1d866cc8" />
+
+
+
+🎮 Features
+
+Tap-to-pour gameplay
+
+Hint system
+
+Undo & restart
+
+Sounds, music, haptics
+
+Light & dark themes
+
+Save progress locally
