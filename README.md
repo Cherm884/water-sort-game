@@ -34,6 +34,4 @@ Undo & restart
 
 Sounds, music, haptics
 
-Light & dark themes
-
 Save progress locally
