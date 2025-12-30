@@ -136,9 +136,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           _animatingColor = GameEngine.getTopColor(_tubes, sourceId);
           _pouringAmount = pourCount;
           
-          // Calculate top-center of tubes
-          _sourcePos = Offset(sourceOffset.dx + sourceBox.size.width / 2, sourceOffset.dy + 10);
-          _targetPos = Offset(targetOffset.dx + targetBox.size.width / 2, targetOffset.dy + 10);
+          // Calculate top-center of tubes (Adjusted for new tube size)
+          _sourcePos = Offset(sourceOffset.dx + sourceBox.size.width / 2, sourceOffset.dy + 15);
+          _targetPos = Offset(targetOffset.dx + targetBox.size.width / 2, targetOffset.dy + 15);
         });
 
         _pourController.forward(from: 0.0);
@@ -472,7 +472,7 @@ class RealisticWaterPourPainter extends CustomPainter {
     if (progress <= 0.0) return;
 
     final dxDir = end.dx > start.dx ? 1 : -1;
-    final realStart = start + Offset(18.0 * dxDir, -8);
+    final realStart = start + Offset(22.0 * dxDir, -5); // Adjusted for new tube width
     
     // Calculate the main stream path with a more natural curve
     final controlPoint1 = Offset(
@@ -682,10 +682,17 @@ class TubeWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // If this is the source of the animation, we rotate it slightly
-    // to simulate "pouring"
-    final double rotation = isAnimatingSource ? 0.4 : 0.0; // 0.4 radians approx 23 degrees
-    
+    // Constants matching the Vector Art style
+    const double tubeWidth = 50.0;
+    const double tubeHeight = 190.0;
+    const double wallThickness = 2.0;
+    const double liquidPadding = 0.0; 
+    const double bottomRadius = 35.0;
+    const Color glassBorderColor = Color(0xFFD0D0E0); // Light Grey/White-ish
+
+    // Rotation for pouring animation
+    final double rotation = isAnimatingSource ? 0.4 : 0.0;
+
     return GestureDetector(
       onTap: onTap,
       child: TweenAnimationBuilder<double>(
@@ -703,103 +710,151 @@ class TubeWidget extends StatelessWidget {
           curve: Curves.easeOut,
           transform: Matrix4.translationValues(0, isSelected ? -20 : 0, 0)
             ..scale(scale),
-          width: 55,
-          height: 180,
+          width: tubeWidth,
+          height: tubeHeight,
           child: Stack(
             alignment: Alignment.bottomCenter,
+            clipBehavior: Clip.none,
             children: [
+              // 1. The Glass Body (Background & Border)
               Container(
+                width: tubeWidth,
+                height: tubeHeight - 17, // Subtract rim height
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
-                  borderRadius: const BorderRadius.vertical(
-                    bottom: Radius.circular(30),
+                  color: Colors.white.withOpacity(0.04), // Dark interior
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(bottomRadius),
+                    bottomRight: Radius.circular(bottomRadius),
                   ),
                   border: Border.all(
-                    color: isSelected
-                        ? Colors.yellowAccent.withOpacity(0.8)
-                        : Colors.white.withOpacity(0.3),
-                    width: 2,
+                    color: glassBorderColor,
+                    width: wallThickness,
                   ),
-                  boxShadow: isSelected
-                      ? [
-                          BoxShadow(
-                            color: Colors.yellowAccent.withOpacity(0.2),
-                            blurRadius: 20,
-                          ),
-                        ]
-                      : null,
                 ),
               ),
-              ClipRRect(
-                borderRadius: const BorderRadius.vertical(
-                  bottom: Radius.circular(28),
-                ),
+
+              // 2. The Liquid Column
+              Positioned(
+                bottom: wallThickness, // Sit above the bottom border
+                left: wallThickness + liquidPadding, // Sit inside left border
+                right: wallThickness + liquidPadding, // Sit inside right border
+                top: 25, // Push down below rim
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.end,
-                  children: data.colors.reversed.toList().asMap().entries.map((entry) {
-                    final index = entry.key;
-                    final colorKey = entry.value;
-                    final isTopLayer = index == 0;
-                    
-                    return Container(
-                      height: 180 / kTubeCapacity,
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        color: kColors[colorKey] ?? Colors.red,
-                        // Add subtle gradient for depth
-                        gradient: isTopLayer
-                            ? LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  (kColors[colorKey] ?? Colors.red).withOpacity(0.9),
-                                  kColors[colorKey] ?? Colors.red,
-                                ],
-                              )
-                            : null,
-                      ),
-                      child: isTopLayer
-                          ? Container(
-                              decoration: BoxDecoration(
-                                // Add shine effect on top layer
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [
-                                    Colors.white.withOpacity(0.2),
-                                    Colors.transparent,
-                                  ],
-                                ),
-                              ),
-                            )
-                          : null,
-                    );
-                  }).toList(),
+                  children: _buildLiquidStack(
+                    bottomRadius - wallThickness - liquidPadding,
+                  ),
                 ),
               ),
+
+              // 3. Glossy Reflections (Vector Style)
+              // Left Highlight
+              Positioned(
+                left: 10,
+                top: 25,
+                bottom: 25,
+                child: Container(
+                  width: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              ),
+              // Right Highlight (Small)
+              Positioned(
+                right: 10,
+                top: 25,
+                height: 30,
+                child: Container(
+                  width: 3,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+
+              // 4. The Top Rim (Lip)
               Positioned(
                 top: 0,
                 child: Container(
-                  width: 56,
-                  height: 10,
+                  width: tubeWidth + 8, // Slightly wider than body
+                  height: 20,
                   decoration: BoxDecoration(
+                    color: Colors.transparent,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.3),
-                      width: 2,
+                      color: glassBorderColor,
+                      width: wallThickness,
                     ),
+                  ),
+                  // The "Highlight" on the rim
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 15,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.3),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
+
+              // 5. Selection Arrow
               if (isSelected && !isAnimatingSource)
-                Positioned(
-                    top: -30,
-                    child: Icon(Icons.arrow_downward,
-                        color: Colors.yellowAccent, size: 24))
+                const Positioned(
+                  top: -40,
+                  child: Icon(Icons.arrow_downward,
+                      color: Colors.yellowAccent, size: 28),
+                ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  List<Widget> _buildLiquidStack(double internalRadius) {
+    int totalSlots = kTubeCapacity;
+    int filledSlots = data.colors.length;
+    int emptySlots = totalSlots - filledSlots;
+
+    List<Widget> widgets = [];
+
+    // 1. Add Empty Slots (Transparent)
+    for (int i = 0; i < emptySlots; i++) {
+      widgets.add(Expanded(child: Container(color: Colors.transparent)));
+    }
+
+    // 2. Add Colored Slots (Reversed loop because column is Top-Down)
+    // data.colors[0] is Bottom. data.colors[last] is Top.
+    for (int i = filledSlots - 1; i >= 0; i--) {
+      String colorKey = data.colors[i];
+      bool isBottomLiquid = (i == 0); 
+
+      widgets.add(
+        Expanded(
+          child: Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 0), // Flat stacking
+            decoration: BoxDecoration(
+              color: kColors[colorKey] ?? Colors.red,
+              // Only round the bottom of the very last liquid
+              borderRadius: isBottomLiquid
+                  ? BorderRadius.vertical(bottom: Radius.circular(internalRadius))
+                  : BorderRadius.zero,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return widgets;
   }
 }
