@@ -37,14 +37,18 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   String? _animatingColor;
   Offset? _sourcePos;
   Offset? _targetPos;
+  double _tiltDirection = 1.0; // +1 = tilt right, -1 = tilt left
+  Offset? _sourceOriginalPos; // Store original position
   int _pouringAmount = 0; // Track how much liquid is being poured
+  Size? _sourceSize; // Store source tube size
+  bool _moveAppliedEarly = false; // Whether we already applied the move to tube data
 
   @override
   void initState() {
     super.initState();
     _pourController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 1500), // Longer for move + pour + return
     );
     
     _pourController.addStatusListener((status) {
@@ -130,15 +134,50 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           }
         }
         
+        // Calculate positions (centers of the tubes)
+        final sourceCenter = Offset(
+          sourceOffset.dx + sourceBox.size.width / 2,
+          sourceOffset.dy + sourceBox.size.height / 2,
+        );
+        final targetCenter = Offset(
+          targetOffset.dx + targetBox.size.width / 2,
+          targetOffset.dy + targetBox.size.height / 2,
+        );
+        final horizontalDir = targetCenter.dx >= sourceCenter.dx ? 1.0 : -1.0;
+
+        // Apply the move immediately so the colors in the tubes update at once.
+        // Keep a snapshot in history for undo.
+        final previousSnapshot = _tubes.map((t) => t.copy()).toList();
+        final previewTubes = GameEngine.performMove(_tubes, sourceId, targetId);
+
+        final oldSourcePreview = _tubes.firstWhere((t) => t.id == sourceId);
+        final newSourcePreview = previewTubes.firstWhere((t) => t.id == sourceId);
+
+        // If nothing actually changed, don't animate.
+        if (oldSourcePreview.colors.length == newSourcePreview.colors.length) {
+          return;
+        }
+        
         setState(() {
+          // Update tubes immediately for visual sync
+          _history.add(previousSnapshot);
+          _tubes = previewTubes;
+          _moveAppliedEarly = true;
+
           _animatingSourceId = sourceId;
           _animatingTargetId = targetId;
-          _animatingColor = GameEngine.getTopColor(_tubes, sourceId);
+          // Use the original top color from the source tube for the pouring effect
+          _animatingColor = colorToMove;
           _pouringAmount = pourCount;
           
-          // Calculate top-center of tubes (Adjusted for new tube size)
-          _sourcePos = Offset(sourceOffset.dx + sourceBox.size.width / 2, sourceOffset.dy + 15);
-          _targetPos = Offset(targetOffset.dx + targetBox.size.width / 2, targetOffset.dy + 15);
+          // Store original position (center of tube)
+          _sourceOriginalPos = sourceCenter;
+          _sourceSize = sourceBox.size;
+          _tiltDirection = horizontalDir;
+          
+          // Calculate pour positions (top of tubes)
+          _sourcePos = Offset(sourceCenter.dx, sourceOffset.dy + 15);
+          _targetPos = Offset(targetCenter.dx, targetOffset.dy + 15);
         });
 
         _pourController.forward(from: 0.0);
@@ -163,7 +202,34 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   void _finalizeMoveDirectly(int sourceId, int targetId) async {
     // Reset animation state
     _pourController.reset();
+
+    if (_moveAppliedEarly) {
+      // Move already applied at the start of the animation.
+      setState(() {
+        _selectedTubeId = null;
+        
+        // Clear animation vars
+        _animatingSourceId = null;
+        _animatingTargetId = null;
+        _sourcePos = null;
+        _targetPos = null;
+        _sourceOriginalPos = null;
+        _sourceSize = null;
+        _pouringAmount = 0;
+        _moveAppliedEarly = false;
+      });
+      HapticFeedback.mediumImpact();
+
+      if (GameEngine.checkWin(_tubes)) {
+        setState(() => _isCompleted = true);
+        await Future.delayed(const Duration(milliseconds: 500));
+        _showWinDialog();
+        _saveProgress();
+      }
+      return;
+    }
     
+    // Fallback path (no early move applied, e.g. if animation skipped)
     final newTubes = GameEngine.performMove(_tubes, sourceId, targetId);
     final oldSource = _tubes.firstWhere((t) => t.id == sourceId);
     final newSource = newTubes.firstWhere((t) => t.id == sourceId);
@@ -179,6 +245,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         _animatingTargetId = null;
         _sourcePos = null;
         _targetPos = null;
+        _sourceOriginalPos = null;
+        _sourceSize = null;
         _pouringAmount = 0;
       });
       HapticFeedback.mediumImpact();
@@ -194,6 +262,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         _selectedTubeId = null;
         _animatingSourceId = null;
         _animatingTargetId = null;
+        _sourceOriginalPos = null;
+        _sourceSize = null;
       });
     }
   }
@@ -391,13 +461,19 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                              _tubeKeys[tube.id] = GlobalKey();
                           }
                           
-                          return TubeWidget(
-                            key: _tubeKeys[tube.id],
-                            data: tube,
-                            isSelected: _selectedTubeId == tube.id,
-                            isAnimatingSource: _animatingSourceId == tube.id,
-                            onTap: () => _handleTubeTap(tube.id),
-                            scale: isCrowded ? 0.85 : 1.0,
+                          // Hide the source tube during animation (it will be shown as floating)
+                          final isHiddenSource = _animatingSourceId == tube.id && _pourController.isAnimating;
+                          
+                          return Opacity(
+                            opacity: isHiddenSource ? 0.0 : 1.0,
+                            child: TubeWidget(
+                              key: _tubeKeys[tube.id],
+                              data: tube,
+                              isSelected: _selectedTubeId == tube.id,
+                              isAnimatingSource: false, // Don't show rotation in original position
+                              onTap: () => _handleTubeTap(tube.id),
+                              scale: isCrowded ? 0.85 : 1.0,
+                            ),
                           );
                         }).toList(),
                       ),
@@ -429,26 +505,153 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             ),
           ),
           
-          // Layer 2: The Liquid Stream Animation
-          if (_pourController.isAnimating && _sourcePos != null && _targetPos != null && _animatingColor != null)
+          // Layer 2: Moving Source Tube + Pouring Animation
+          if (_pourController.isAnimating && 
+              _animatingSourceId != null && 
+              _sourceOriginalPos != null && 
+              _targetPos != null && 
+              _sourceSize != null &&
+              _animatingColor != null)
              AnimatedBuilder(
                animation: _pourController,
                builder: (ctx, child) {
-                 return CustomPaint(
-                   painter: RealisticWaterPourPainter(
-                     start: _sourcePos!,
-                     end: _targetPos!,
-                     color: kColors[_animatingColor] ?? Colors.blue,
-                     progress: _pourController.value,
-                     pouringAmount: _pouringAmount,
-                   ),
-                   size: MediaQuery.of(context).size,
+                 // Animation phases:
+                 // 0.0 - 0.3: Move to target
+                 // 0.3 - 0.7: Pour liquid
+                 // 0.7 - 1.0: Move back
+                 
+                final progress = _pourController.value;
+                 Offset currentPos;
+                 double rotation = 0.0;
+                 double pourProgress = 0.0;
+
+                 // Target position for the CENTER of the moving tube when crossing the target.
+                 // We offset the center opposite the tilt direction so that the mouth
+                 // of the tube visually sits above the center of the target tube.
+                 final Offset crossCenter = Offset(
+                   _targetPos!.dx - _tiltDirection * (_sourceSize!.width * 0.25),
+                   _targetPos!.dy + _sourceSize!.height / 2 - 15,
+                 );
+                 
+                 if (progress < 0.3) {
+                   // Moving to crossing position above target
+                   final moveProgress = progress / 0.3;
+                   currentPos = Offset.lerp(_sourceOriginalPos!, crossCenter, moveProgress)!;
+                   rotation = 0.5 * moveProgress * _tiltDirection; // Tilt towards target
+                 } else if (progress < 0.7) {
+                   // At target, pouring while crossing
+                   currentPos = crossCenter;
+                   rotation = 0.5 * _tiltDirection; // Fully tilted towards target
+                   pourProgress = (progress - 0.3) / 0.4; // 0 to 1 during pour phase
+                 } else {
+                   // Moving back from crossing position to original place
+                   final returnProgress = (progress - 0.7) / 0.3;
+                   currentPos = Offset.lerp(crossCenter, _sourceOriginalPos!, returnProgress)!;
+                   rotation = 0.5 * (1 - returnProgress) * _tiltDirection; // Untilt back
+                 }
+                 
+                 return Stack(
+                   clipBehavior: Clip.none,
+                   children: [
+                     // Floating source tube
+                     Positioned(
+                       left: currentPos.dx - _sourceSize!.width / 2,
+                       top: currentPos.dy - _sourceSize!.height / 2,
+                       child: Transform.rotate(
+                         angle: rotation,
+                         alignment: _tiltDirection >= 0 ? Alignment.bottomRight : Alignment.bottomLeft,
+                         child: TubeWidget(
+                           data: _tubes.firstWhere((t) => t.id == _animatingSourceId),
+                           isSelected: false,
+                           isAnimatingSource: false, // rotation handled here
+                           onTap: () {},
+                           scale: 1.0,
+                         ),
+                       ),
+                     ),
+                     // Pouring stream (only during pour phase) - full screen overlay
+                     if (progress >= 0.3 && progress < 0.7)
+                       Positioned.fill(
+                         child: CustomPaint(
+                           painter: SimpleWaterPourPainter(
+                             // Start directly above the target tube center, but higher up near the tube mouth
+                             start: Offset(
+                               _targetPos!.dx,
+                               currentPos.dy - _sourceSize!.height / 2 + 15,
+                             ),
+                             end: _targetPos!,
+                             color: kColors[_animatingColor] ?? Colors.blue,
+                             progress: pourProgress,
+                           ),
+                         ),
+                       ),
+                   ],
                  );
                },
              ),
         ],
       ),
     );
+  }
+}
+
+class SimpleWaterPourPainter extends CustomPainter {
+  final Offset start;
+  final Offset end;
+  final Color color;
+  final double progress;
+
+  SimpleWaterPourPainter({
+    required this.start,
+    required this.end,
+    required this.color,
+    required this.progress,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0.0) return;
+
+    // Draw a simple vertical stream (thick solid bar)
+    final streamPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    
+    // Calculate stream length
+    final streamLength = (end.dy - start.dy) * progress;
+    final streamTop = start.dy;
+    final streamBottom = start.dy + streamLength;
+    
+    // Draw thick vertical stream (like in the image)
+    final streamWidth = 14.0;
+    final streamRect = Rect.fromLTWH(
+      start.dx - streamWidth / 2,
+      streamTop,
+      streamWidth,
+      streamLength,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(streamRect, const Radius.circular(7)),
+      streamPaint,
+    );
+    
+    // Draw pool/blob at target when stream reaches
+    if (progress > 0.2) {
+      final poolProgress = ((progress - 0.2) / 0.8).clamp(0.0, 1.0);
+      final poolSize = 8.0 + poolProgress * 12.0; // Grow from 8 to 20
+      final poolPaint = Paint()
+        ..color = color
+        ..style = PaintingStyle.fill;
+      
+      canvas.drawCircle(end, poolSize, poolPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant SimpleWaterPourPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+           oldDelegate.start != start ||
+           oldDelegate.end != end;
   }
 }
 
@@ -471,134 +674,63 @@ class RealisticWaterPourPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (progress <= 0.0) return;
 
-    final dxDir = end.dx > start.dx ? 1 : -1;
-    final realStart = start + Offset(22.0 * dxDir, -5); // Adjusted for new tube width
-    
-    // Calculate the main stream path with a more natural curve
-    final controlPoint1 = Offset(
-      realStart.dx + (end.dx - realStart.dx) * 0.3,
-      min(realStart.dy, end.dy) - 80,
-    );
-    final controlPoint2 = Offset(
-      realStart.dx + (end.dx - realStart.dx) * 0.7,
-      min(realStart.dy, end.dy) - 50,
-    );
+    // We want a straight vertical stream like the reference image.
+    // The stream should fall vertically above the target tube.
 
-    final path = Path();
-    path.moveTo(realStart.dx, realStart.dy);
-    path.cubicTo(
-      controlPoint1.dx, controlPoint1.dy,
-      controlPoint2.dx, controlPoint2.dy,
-      end.dx, end.dy,
-    );
+    // Mouth position of the pouring tube (start of the stream)
+    final mouth = start;
 
-    final metrics = path.computeMetrics().first;
-    final totalLength = metrics.length;
-    
-    // Calculate stream progress - continuous flow
-    double streamProgress = progress;
-    if (progress > 0.7) {
-      // Start tapering off
-      streamProgress = 1.0 - ((progress - 0.7) / 0.3);
-    }
-    
-    final currentLength = totalLength * streamProgress;
-    
-    // Draw main stream with varying width
-    final streamPath = metrics.extractPath(0, currentLength);
-    
-    // Create gradient for the stream (darker at edges, lighter in center)
+    // Impact point on the target tube (top center)
+    final impact = end;
+
+    // Use the target tube's x-coordinate so the stream is perfectly vertical.
+    final streamX = impact.dx;
+
+    // Total vertical distance from mouth to impact.
+    final totalDy = impact.dy - mouth.dy;
+
+    // Animate the length of the stream over time.
+    final t = Curves.easeInOut.transform(progress.clamp(0.0, 1.0));
+    final currentDy = totalDy * t;
+
+    // Current end of the stream (cannot go below impact point).
+    final currentEndY = (mouth.dy + currentDy).clamp(mouth.dy, impact.dy);
+    final startPoint = Offset(streamX, mouth.dy);
+    final endPoint = Offset(streamX, currentEndY);
+
+    // Main stream
     final streamPaint = Paint()
+      ..color = color
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    
-    // Draw multiple layers for depth
-    // Outer shadow layer
-    streamPaint
-      ..color = color.withOpacity(0.3)
-      ..strokeWidth = 16.0;
-    canvas.drawPath(streamPath, streamPaint);
-    
-    // Main stream layer
-    streamPaint
-      ..color = color
-      ..strokeWidth = 14.0;
-    canvas.drawPath(streamPath, streamPaint);
-    
-    // Inner highlight layer (brighter)
-    streamPaint
-      ..color = Color.fromARGB(
-        (color.alpha * 0.95).round().clamp(0, 255),
-        (color.red * 1.1).round().clamp(0, 255),
-        (color.green * 1.1).round().clamp(0, 255),
-        (color.blue * 1.1).round().clamp(0, 255),
-      )
       ..strokeWidth = 10.0;
-    canvas.drawPath(streamPath, streamPaint);
-    
-    // Add shine/reflection on top
-    streamPaint
-      ..color = Colors.white.withOpacity(0.3)
-      ..strokeWidth = 6.0;
-    canvas.drawPath(streamPath, streamPaint);
 
-    // Draw water droplets along the stream
-    final dropletCount = (currentLength / 15).floor();
-    for (int i = 0; i < dropletCount; i++) {
-      final t = (i / dropletCount) * streamProgress;
-      if (t > streamProgress) continue;
-      
-      final tangent = metrics.getTangentForOffset(totalLength * t);
-      if (tangent != null) {
-        final pos = tangent.position;
-        final dropletPaint = Paint()
-          ..color = color
-          ..style = PaintingStyle.fill;
-        
-        // Random size variation for realism
-        final size = 3.0 + (i % 3) * 1.5;
-        canvas.drawCircle(pos, size, dropletPaint);
-        
-        // Add highlight to droplets
-        final highlightPaint = Paint()
-          ..color = Colors.white.withOpacity(0.5)
-          ..style = PaintingStyle.fill;
-        canvas.drawCircle(pos + Offset(-1, -1), size * 0.4, highlightPaint);
-      }
-    }
+    canvas.drawLine(startPoint, endPoint, streamPaint);
 
-    // Draw splash effect at the target when stream reaches
-    if (progress > 0.3 && progress < 0.9) {
-      final splashProgress = ((progress - 0.3) / 0.6).clamp(0.0, 1.0);
-      final splashPaint = Paint()
-        ..color = color.withOpacity(0.6 * (1 - splashProgress))
+    // Soft outer glow to match the polished look.
+    final glowPaint = Paint()
+      ..color = color.withOpacity(0.35)
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = 14.0;
+    canvas.drawLine(startPoint, endPoint, glowPaint);
+
+    // Circular pool at the impact point, grows slightly during the pour.
+    if (progress > 0.25) {
+      final poolT = Curves.easeOut.transform(((progress - 0.25) / 0.75).clamp(0.0, 1.0));
+      final poolRadius = 8.0 + 4.0 * poolT;
+
+      final poolPaint = Paint()
+        ..color = color
         ..style = PaintingStyle.fill;
-      
-      // Draw multiple splash particles
-      for (int i = 0; i < 8; i++) {
-        final angle = (i / 8) * 2 * pi;
-        final distance = 8.0 + splashProgress * 15.0;
-        final splashPos = end + Offset(
-          cos(angle) * distance,
-          sin(angle) * distance,
-        );
-        final splashSize = 2.0 + splashProgress * 3.0;
-        canvas.drawCircle(splashPos, splashSize, splashPaint);
-      }
-      
-      // Draw ripples
-      for (int i = 0; i < 3; i++) {
-        final rippleProgress = (splashProgress - i * 0.3).clamp(0.0, 1.0);
-        if (rippleProgress > 0) {
-          final ripplePaint = Paint()
-            ..color = color.withOpacity(0.3 * (1 - rippleProgress))
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 2.0;
-          final rippleRadius = 5.0 + rippleProgress * 12.0;
-          canvas.drawCircle(end, rippleRadius, ripplePaint);
-        }
-      }
+      final poolGlowPaint = Paint()
+        ..color = color.withOpacity(0.4)
+        ..style = PaintingStyle.fill;
+
+      final poolCenter = Offset(streamX, impact.dy + 4);
+
+      canvas.drawCircle(poolCenter, poolRadius + 2, poolGlowPaint);
+      canvas.drawCircle(poolCenter, poolRadius, poolPaint);
     }
   }
 
@@ -690,8 +822,8 @@ class TubeWidget extends StatelessWidget {
     const double bottomRadius = 35.0;
     const Color glassBorderColor = Color(0xFFD0D0E0); // Light Grey/White-ish
 
-    // Rotation for pouring animation
-    final double rotation = isAnimatingSource ? 0.4 : 0.0;
+    // Rotation for pouring animation (tilt more when pouring, similar to reference image)
+    final double rotation = isAnimatingSource ? 0.8 : 0.0;
 
     return GestureDetector(
       onTap: onTap,
