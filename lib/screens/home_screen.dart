@@ -7,7 +7,9 @@ import 'package:water_sort/src/constants.dart';
 import 'package:water_sort/screens/game_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final Function(ThemeMode)? onThemeModeChanged;
+  
+  const HomeScreen({super.key, this.onThemeModeChanged});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -138,7 +140,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         icon: Icons.settings,
                         onTap: () {
                           Navigator.push(context, MaterialPageRoute(builder: (_) {
-                            return const SettingsScreen();
+                            return SettingsScreen(
+                              onThemeModeChanged: widget.onThemeModeChanged,
+                            );
                           }));
                         },
                       ),

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final Function(ThemeMode)? onThemeModeChanged;
+  
+  const SettingsScreen({super.key, this.onThemeModeChanged});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -13,6 +15,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _musicEnabled = true;
   double _soundVolume = 1.0;
   double _musicVolume = 1.0;
+  bool _darkMode = true;
 
   @override
   void initState() {
@@ -27,6 +30,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _musicEnabled = prefs.getBool('musicEnabled') ?? true;
       _soundVolume = prefs.getDouble('soundVolume') ?? 1.0;
       _musicVolume = prefs.getDouble('musicVolume') ?? 1.0;
+      _darkMode = prefs.getBool('darkMode') ?? true;
     });
   }
 
@@ -36,6 +40,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     prefs.setBool('musicEnabled', _musicEnabled);
     prefs.setDouble('soundVolume', _soundVolume);
     prefs.setDouble('musicVolume', _musicVolume);
+    prefs.setBool('darkMode', _darkMode);
   }
 
   void _resetProgress() async {
@@ -57,6 +62,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Appearance Settings
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Appearance', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  SwitchListTile(
+                    title: const Text('Dark Mode'),
+                    subtitle: const Text('Toggle between light and dark theme'),
+                    value: _darkMode,
+                    onChanged: (val) {
+                      setState(() => _darkMode = val);
+                      _saveSettings();
+                      if (widget.onThemeModeChanged != null) {
+                        widget.onThemeModeChanged!(
+                          val ? ThemeMode.dark : ThemeMode.light,
+                        );
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           // Audio Settings
           Card(
             child: Padding(
