@@ -37,13 +37,14 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   String? _animatingColor;
   Offset? _sourcePos;
   Offset? _targetPos;
+  int _pouringAmount = 0; // Track how much liquid is being poured
 
   @override
   void initState() {
     super.initState();
     _pourController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 500),
+      duration: const Duration(milliseconds: 800),
     );
     
     _pourController.addStatusListener((status) {
@@ -117,13 +118,23 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         final sourceOffset = sourceBox.localToGlobal(Offset.zero);
         final targetOffset = targetBox.localToGlobal(Offset.zero);
         
-        // Convert global to local for the Stack (approximate, since Stack fills screen)
-        // We assume the Stack covers the whole body.
+        // Calculate how much liquid will be poured
+        final colorToMove = sourceTube.colors.last;
+        int pourCount = 0;
+        for (int i = sourceTube.colors.length - 1; i >= 0; i--) {
+          if (sourceTube.colors[i] == colorToMove && 
+              targetTube.colors.length + pourCount < targetTube.capacity) {
+            pourCount++;
+          } else {
+            break;
+          }
+        }
         
         setState(() {
           _animatingSourceId = sourceId;
           _animatingTargetId = targetId;
           _animatingColor = GameEngine.getTopColor(_tubes, sourceId);
+          _pouringAmount = pourCount;
           
           // Calculate top-center of tubes
           _sourcePos = Offset(sourceOffset.dx + sourceBox.size.width / 2, sourceOffset.dy + 10);
@@ -168,6 +179,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         _animatingTargetId = null;
         _sourcePos = null;
         _targetPos = null;
+        _pouringAmount = 0;
       });
       HapticFeedback.mediumImpact();
 
@@ -423,11 +435,12 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                animation: _pourController,
                builder: (ctx, child) {
                  return CustomPaint(
-                   painter: LiquidStreamPainter(
+                   painter: RealisticWaterPourPainter(
                      start: _sourcePos!,
                      end: _targetPos!,
                      color: kColors[_animatingColor] ?? Colors.blue,
                      progress: _pourController.value,
+                     pouringAmount: _pouringAmount,
                    ),
                    size: MediaQuery.of(context).size,
                  );
@@ -439,83 +452,161 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 }
 
-class LiquidStreamPainter extends CustomPainter {
+class RealisticWaterPourPainter extends CustomPainter {
   final Offset start;
   final Offset end;
   final Color color;
   final double progress;
+  final int pouringAmount;
 
-  LiquidStreamPainter({
+  RealisticWaterPourPainter({
     required this.start,
     required this.end,
     required this.color,
     required this.progress,
+    required this.pouringAmount,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     if (progress <= 0.0) return;
 
-    // Convert global coordinates to local if needed, 
-    // but here we used global coord calc in GameScreen + fullscreen Stack,
-    // so `start` and `end` are roughly correct relative to the screen.
-
-    // Adjust Start point: The liquid comes out of the "top" of the rotated tube
-    // We offset slightly to make it look like it's pouring from the lip
     final dxDir = end.dx > start.dx ? 1 : -1;
-    final realStart = start + Offset(15.0 * dxDir, -10);
+    final realStart = start + Offset(18.0 * dxDir, -8);
     
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 12.0
-      ..strokeCap = StrokeCap.round;
+    // Calculate the main stream path with a more natural curve
+    final controlPoint1 = Offset(
+      realStart.dx + (end.dx - realStart.dx) * 0.3,
+      min(realStart.dy, end.dy) - 80,
+    );
+    final controlPoint2 = Offset(
+      realStart.dx + (end.dx - realStart.dx) * 0.7,
+      min(realStart.dy, end.dy) - 50,
+    );
 
     final path = Path();
     path.moveTo(realStart.dx, realStart.dy);
-
-    // Quadratic Bezier for a natural arc
-    // Control point is higher than both to create an arc
-    final controlPoint = Offset(
-      (realStart.dx + end.dx) / 2,
-      min(realStart.dy, end.dy) - 60, // Arch up by 60px
+    path.cubicTo(
+      controlPoint1.dx, controlPoint1.dy,
+      controlPoint2.dx, controlPoint2.dy,
+      end.dx, end.dy,
     );
 
-    path.quadraticBezierTo(controlPoint.dx, controlPoint.dy, end.dx, end.dy);
-
-    // Animation Logic:
-    // We want the stream to grow from start to end, then shrink from start to end
-    
-    // Create a path metric to measure length
     final metrics = path.computeMetrics().first;
     final totalLength = metrics.length;
     
-    // First half: Grow stream
-    // Second half: Shrink stream tail
-    double startTrim = 0.0;
-    double endTrim = 0.0;
+    // Calculate stream progress - continuous flow
+    double streamProgress = progress;
+    if (progress > 0.7) {
+      // Start tapering off
+      streamProgress = 1.0 - ((progress - 0.7) / 0.3);
+    }
     
-    if (progress < 0.5) {
-      // Growing phase (0 to 100% length)
-      endTrim = progress * 2.0; 
-    } else {
-      // Shrinking phase
-      endTrim = 1.0;
-      startTrim = (progress - 0.5) * 2.0;
+    final currentLength = totalLength * streamProgress;
+    
+    // Draw main stream with varying width
+    final streamPath = metrics.extractPath(0, currentLength);
+    
+    // Create gradient for the stream (darker at edges, lighter in center)
+    final streamPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    
+    // Draw multiple layers for depth
+    // Outer shadow layer
+    streamPaint
+      ..color = color.withOpacity(0.3)
+      ..strokeWidth = 16.0;
+    canvas.drawPath(streamPath, streamPaint);
+    
+    // Main stream layer
+    streamPaint
+      ..color = color
+      ..strokeWidth = 14.0;
+    canvas.drawPath(streamPath, streamPaint);
+    
+    // Inner highlight layer (brighter)
+    streamPaint
+      ..color = Color.fromARGB(
+        (color.alpha * 0.95).round().clamp(0, 255),
+        (color.red * 1.1).round().clamp(0, 255),
+        (color.green * 1.1).round().clamp(0, 255),
+        (color.blue * 1.1).round().clamp(0, 255),
+      )
+      ..strokeWidth = 10.0;
+    canvas.drawPath(streamPath, streamPaint);
+    
+    // Add shine/reflection on top
+    streamPaint
+      ..color = Colors.white.withOpacity(0.3)
+      ..strokeWidth = 6.0;
+    canvas.drawPath(streamPath, streamPaint);
+
+    // Draw water droplets along the stream
+    final dropletCount = (currentLength / 15).floor();
+    for (int i = 0; i < dropletCount; i++) {
+      final t = (i / dropletCount) * streamProgress;
+      if (t > streamProgress) continue;
+      
+      final tangent = metrics.getTangentForOffset(totalLength * t);
+      if (tangent != null) {
+        final pos = tangent.position;
+        final dropletPaint = Paint()
+          ..color = color
+          ..style = PaintingStyle.fill;
+        
+        // Random size variation for realism
+        final size = 3.0 + (i % 3) * 1.5;
+        canvas.drawCircle(pos, size, dropletPaint);
+        
+        // Add highlight to droplets
+        final highlightPaint = Paint()
+          ..color = Colors.white.withOpacity(0.5)
+          ..style = PaintingStyle.fill;
+        canvas.drawCircle(pos + Offset(-1, -1), size * 0.4, highlightPaint);
+      }
     }
 
-    // Extract the sub-path based on animation progress
-    final extractPath = metrics.extractPath(
-      totalLength * startTrim,
-      totalLength * endTrim,
-    );
-
-    canvas.drawPath(extractPath, paint);
+    // Draw splash effect at the target when stream reaches
+    if (progress > 0.3 && progress < 0.9) {
+      final splashProgress = ((progress - 0.3) / 0.6).clamp(0.0, 1.0);
+      final splashPaint = Paint()
+        ..color = color.withOpacity(0.6 * (1 - splashProgress))
+        ..style = PaintingStyle.fill;
+      
+      // Draw multiple splash particles
+      for (int i = 0; i < 8; i++) {
+        final angle = (i / 8) * 2 * pi;
+        final distance = 8.0 + splashProgress * 15.0;
+        final splashPos = end + Offset(
+          cos(angle) * distance,
+          sin(angle) * distance,
+        );
+        final splashSize = 2.0 + splashProgress * 3.0;
+        canvas.drawCircle(splashPos, splashSize, splashPaint);
+      }
+      
+      // Draw ripples
+      for (int i = 0; i < 3; i++) {
+        final rippleProgress = (splashProgress - i * 0.3).clamp(0.0, 1.0);
+        if (rippleProgress > 0) {
+          final ripplePaint = Paint()
+            ..color = color.withOpacity(0.3 * (1 - rippleProgress))
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.0;
+          final rippleRadius = 5.0 + rippleProgress * 12.0;
+          canvas.drawCircle(end, rippleRadius, ripplePaint);
+        }
+      }
+    }
   }
 
   @override
-  bool shouldRepaint(covariant LiquidStreamPainter oldDelegate) {
-    return oldDelegate.progress != progress;
+  bool shouldRepaint(covariant RealisticWaterPourPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+           oldDelegate.start != start ||
+           oldDelegate.end != end;
   }
 }
 
@@ -593,7 +684,7 @@ class TubeWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     // If this is the source of the animation, we rotate it slightly
     // to simulate "pouring"
-    final double rotation = isAnimatingSource ? 0.5 : 0.0; // 0.5 radians approx 28 degrees
+    final double rotation = isAnimatingSource ? 0.4 : 0.0; // 0.4 radians approx 23 degrees
     
     return GestureDetector(
       onTap: onTap,
@@ -645,11 +736,43 @@ class TubeWidget extends StatelessWidget {
                 ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.end,
-                  children: data.colors.reversed.map((colorKey) {
+                  children: data.colors.reversed.toList().asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final colorKey = entry.value;
+                    final isTopLayer = index == 0;
+                    
                     return Container(
                       height: 180 / kTubeCapacity,
                       width: double.infinity,
-                      color: kColors[colorKey] ?? Colors.red,
+                      decoration: BoxDecoration(
+                        color: kColors[colorKey] ?? Colors.red,
+                        // Add subtle gradient for depth
+                        gradient: isTopLayer
+                            ? LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  (kColors[colorKey] ?? Colors.red).withOpacity(0.9),
+                                  kColors[colorKey] ?? Colors.red,
+                                ],
+                              )
+                            : null,
+                      ),
+                      child: isTopLayer
+                          ? Container(
+                              decoration: BoxDecoration(
+                                // Add shine effect on top layer
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    Colors.white.withOpacity(0.2),
+                                    Colors.transparent,
+                                  ],
+                                ),
+                              ),
+                            )
+                          : null,
                     );
                   }).toList(),
                 ),
