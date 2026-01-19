@@ -2,7 +2,9 @@
 
 A fun and addictive Water Sort Puzzle Game where players must sort colored liquids into the correct bottles. The goal is simple—but the challenge grows with every level!
 
-🎮 Gameplay Overview
+🎮 Gameplay video
+
+https://www.youtube.com/watch?v=6BLbVt52jIY
 
 Each bottle contains multiple layers of colored water
 
